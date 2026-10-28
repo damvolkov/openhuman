@@ -71,3 +71,45 @@ pub async fn reload(
     ENGINE.install(loaded).await;
     ENGINE.snapshot().await
 }
+
+/// Prompt that makes the test `beforeSubmitPrompt` hooks add context.
+#[cfg(test)]
+pub(crate) const TEST_HOOK_CONTEXT: &str = "ZZ-HOOK-CONTEXT";
+/// Prompt that makes the test `beforeSubmitPrompt` hooks block.
+#[cfg(test)]
+pub(crate) const TEST_HOOK_BLOCK: &str = "ZZ-HOOK-BLOCK";
+
+/// Install, once per process and behind a POSIX shell, `beforeSubmitPrompt`
+/// hooks that act only on prompts carrying [`TEST_HOOK_CONTEXT`] or
+/// [`TEST_HOOK_BLOCK`], so no other test's prompt meets them. One installer for
+/// every test module: the engine is process-wide and `install` replaces it.
+#[cfg(test)]
+pub(crate) async fn install_prompt_hooks_for_test() {
+    static INSTALLED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    INSTALLED
+        .get_or_init(|| async {
+            let hook = |command: &str, matcher: &str| {
+                serde_json::from_value::<tinyagents_hooks::command::HookDefinition>(
+                    serde_json::json!({ "command": command, "matcher": matcher }),
+                )
+                .expect("test hook definition")
+            };
+            let mut config = HookConfig::default();
+            config.by_event.insert(
+                tinyagents_hooks::command::HookEvent::BeforeSubmitPrompt,
+                vec![
+                    hook(
+                        r#"cat >/dev/null; echo '{"additional_context": "EXTRACTED-BY-HOOK"}'"#,
+                        &format!("^{TEST_HOOK_CONTEXT}"),
+                    ),
+                    hook(
+                        r#"cat >/dev/null; echo '{"continue": false, "user_message": "hook says no"}'"#,
+                        &format!("^{TEST_HOOK_BLOCK}"),
+                    ),
+                ],
+            );
+            super::shell::install_posix_for_test();
+            ENGINE.install(config).await;
+        })
+        .await;
+}

@@ -296,14 +296,65 @@ impl NativeHost {
 
 struct NativeIngress;
 
+impl NativeIngress {
+    /// Configured `beforeSubmitPrompt` hooks, as the web chat runs them. Added
+    /// context reaches the model on both inputs a channel turn may carry: the
+    /// text, and the typed message a media turn is answered from. A block
+    /// rejects the turn; [`run`] replies with the hook's reason.
+    async fn before_submit(request: &mut TurnRequest<QueuedPayload>) -> IngressDecision {
+        let identity = tinyagents_runtime::command_hooks::context::TurnIdentity {
+            conversation_id: Some(request.thread_id.clone()),
+            ..Default::default()
+        };
+        let prompt = request
+            .payload
+            .native_user_text
+            .as_deref()
+            .unwrap_or(&request.text);
+        match crate::hooks::ops::prompt_submitted(identity, prompt, Vec::new()).await {
+            crate::hooks::PromptVerdict::Submit {
+                additional_context: Some(context),
+            } => {
+                log::debug!(
+                    "[channels::dispatch] beforeSubmitPrompt hook added {} chars of context thread_id={}",
+                    context.chars().count(),
+                    request.thread_id
+                );
+                if let Some(tinyinference_llm::message::Message::User(input)) =
+                    request.payload.native_message_input.as_mut()
+                {
+                    input
+                        .content
+                        .push(tinyinference_llm::message::ContentBlock::Text(
+                            context.clone(),
+                        ));
+                }
+                request.text = format!("{}\n\n{context}", request.text);
+                IngressDecision::Continue
+            }
+            crate::hooks::PromptVerdict::Submit { .. } => IngressDecision::Continue,
+            crate::hooks::PromptVerdict::Block(reason) => {
+                log::info!(
+                    "[channels::dispatch] prompt blocked by a configured hook thread_id={}: {reason}",
+                    request.thread_id
+                );
+                IngressDecision::Reject(reason)
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl IngressPolicy<QueuedPayload> for NativeIngress {
     async fn apply(
         &self,
-        _stage: IngressStage,
-        _request: &mut TurnRequest<QueuedPayload>,
+        stage: IngressStage,
+        request: &mut TurnRequest<QueuedPayload>,
     ) -> Result<IngressDecision, String> {
-        Ok(IngressDecision::Continue)
+        Ok(match stage {
+            IngressStage::BeforeSubmit => Self::before_submit(request).await,
+            _ => IngressDecision::Continue,
+        })
     }
 }
 
@@ -573,6 +624,7 @@ pub(crate) async fn run(
     thread_id: String,
     request_id: String,
     text: String,
+    user_text: String,
     message_timeout_secs: u64,
     message_input: Option<tinyinference_llm::message::Message>,
     staged_parts: Vec<tinychannels_bus::ContentPart>,
@@ -607,11 +659,12 @@ pub(crate) async fn run(
         text,
         payload: QueuedPayload {
             ctx: Some(dispatch.clone()),
-            trusted_turn: Some(trusted),
+            trusted_turn: Some(Arc::clone(&trusted)),
             native_message_input: message_input,
             native_staged_parts: staged_parts,
             native_staged_lease: staged_lease.clone(),
             native_message_id: staged_message_id,
+            native_user_text: Some(user_text),
             native_preparation_error: preparation_error,
             ..Default::default()
         },
@@ -620,7 +673,13 @@ pub(crate) async fn run(
         deadline: Some(deadline),
         idle_timeout: Some(crate::agent::turn_policy::configured_idle_window()),
     };
-    let runner_result = runtime.runner.run(request).await;
+    let runner_result = match runtime.runner.run(request).await {
+        Err(tinyagents_harness::turn_runner::TurnRunnerError::Rejected(reason)) => {
+            return blocked_turn(&runtime.shared, &request_id, &trusted, staged_lease, reason)
+                .await;
+        }
+        other => other,
+    };
     let queued = matches!(
         &runner_result,
         Err(tinyagents_harness::turn_runner::TurnRunnerError::Queued)
@@ -655,6 +714,41 @@ pub(crate) async fn run(
             runtime.shared.take_delivery(&request_id)
         },
         queued,
+    }
+}
+
+/// A turn `beforeSubmitPrompt` refused never reaches the model: its staged
+/// uploads are released and the hook's reason is the reply. A native target
+/// gets it here; the legacy path sends the returned text.
+async fn blocked_turn(
+    shared: &NativeShared,
+    request_id: &str,
+    trusted: &crate::agent::turn_host::TrustedAgentTurn,
+    staged_lease: Option<crate::threads::attachments::NativeStagedLease>,
+    reason: String,
+) -> NativeTurnExecution {
+    let _ = shared.take_delivery(request_id);
+    if let Some(staged_lease) = staged_lease {
+        if staged_lease.discard().await.is_err() {
+            tracing::warn!("[channels::dispatch] failed to clean blocked native media staging");
+        }
+    }
+    let delivered = match trusted.native_target.as_ref() {
+        Some(target) => match target.open(request_id).await {
+            Ok(reply) => {
+                super::processor::progressive::finish_native_reply(&Some(reply), &reason).await
+            }
+            Err(error) => {
+                tracing::warn!("[channels::dispatch] blocked-turn reply unavailable: {error}");
+                false
+            }
+        },
+        None => false,
+    };
+    NativeTurnExecution {
+        result: Ok(crate::agent::bus::AgentTurnResponse::new(reason)),
+        delivery_succeeded: Some(delivered),
+        queued: false,
     }
 }
 
