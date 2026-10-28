@@ -18,6 +18,9 @@ FROM rust:1.99.1-bookworm AS builder
 # `--build-arg CARGO_PROFILE=release` when maximum runtime optimization matters.
 ARG CARGO_PROFILE=ci
 ARG CARGO_BUILD_JOBS=1
+# Cargo gates for the core binary. Empty builds the contributor default; the
+# desktop product set is `--build-arg CARGO_FEATURES="$(scripts/ci/product-features.sh)"`.
+ARG CARGO_FEATURES=""
 ENV DEBIAN_FRONTEND=noninteractive \
     CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
@@ -77,7 +80,7 @@ RUN mkdir -p crates/openhuman-cli/src crates/openhuman-core/src crates/openhuman
     echo '' > crates/openhuman-tinyhumans/src/lib.rs && \
     echo 'fn main() {}' > crates/openhuman-tui/src/main.rs && \
     echo 'pub fn run_from_cli(_: &[String]) -> anyhow::Result<()> { Ok(()) }' > crates/openhuman-tui/src/lib.rs && \
-    cargo build --profile "${CARGO_PROFILE}" -p openhuman-cli --bin openhuman-core 2>/dev/null || true && \
+    cargo build --profile "${CARGO_PROFILE}" -p openhuman-cli --bin openhuman-core ${CARGO_FEATURES:+--features "$CARGO_FEATURES"} 2>/dev/null || true && \
     rm -rf crates/openhuman-cli/src crates/openhuman-core/src crates/openhuman-embed/src \
            crates/openhuman-rpc/src crates/openhuman-tinyhumans/src
 
@@ -93,7 +96,7 @@ COPY crates/openhuman-tinyhumans/src/ crates/openhuman-tinyhumans/src/
 RUN touch crates/openhuman-cli/src/main.rs crates/openhuman-core/src/lib.rs \
           crates/openhuman-embed/src/lib.rs crates/openhuman-rpc/src/lib.rs \
           crates/openhuman-tinyhumans/src/lib.rs && \
-    cargo build --profile "${CARGO_PROFILE}" -p openhuman-cli --bin openhuman-core && \
+    cargo build --profile "${CARGO_PROFILE}" -p openhuman-cli --bin openhuman-core ${CARGO_FEATURES:+--features "$CARGO_FEATURES"} && \
     cp "target/${CARGO_PROFILE}/openhuman-core" /tmp/openhuman-core
 
 # ==========================================================================
