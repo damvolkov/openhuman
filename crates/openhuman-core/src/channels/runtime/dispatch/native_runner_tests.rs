@@ -1,4 +1,5 @@
 use super::*;
+use tinyagents_harness::turn_runner::{IngressDecision, IngressPolicy, IngressStage};
 
 #[test]
 fn channel_deadline_respects_module_floor_and_web_backstop() {
@@ -325,9 +326,11 @@ fn hooked_request(
     }
 }
 
+/// Spawns the hook under `/bin/sh`.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_prompt_hooks_context_reaches_both_inputs_of_a_channel_turn() {
-    crate::hooks::host::install_prompt_hooks_for_test().await;
+    crate::hooks::fixture::install_prompt_hooks().await;
     let input = crate::agent::message_convert::user_message_from_text("ZZ-HOOK-CONTEXT look");
     let mut request = hooked_request("ZZ-HOOK-CONTEXT look", Some(input));
 
@@ -349,9 +352,11 @@ async fn a_prompt_hooks_context_reaches_both_inputs_of_a_channel_turn() {
     ));
 }
 
+/// Spawns the hook under `/bin/sh`.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_prompt_hook_screens_the_senders_words_and_blocks_with_its_reason() {
-    crate::hooks::host::install_prompt_hooks_for_test().await;
+    crate::hooks::fixture::install_prompt_hooks().await;
     let enriched = "[Channel context]\nYou are responding via the \"telegram\" channel.\n\nZZ-HOOK-BLOCK please";
     let mut request = hooked_request(enriched, None);
     request.payload.native_user_text = Some("ZZ-HOOK-BLOCK please".into());
@@ -367,7 +372,7 @@ async fn a_prompt_hook_screens_the_senders_words_and_blocks_with_its_reason() {
 
 #[tokio::test]
 async fn a_prompt_no_hook_matches_passes_through_untouched() {
-    crate::hooks::host::install_prompt_hooks_for_test().await;
+    crate::hooks::fixture::install_prompt_hooks().await;
     let mut request = hooked_request("an ordinary message", None);
 
     let decision = NativeIngress

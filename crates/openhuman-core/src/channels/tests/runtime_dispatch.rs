@@ -288,12 +288,14 @@ async fn process_channel_message_sends_typing_before_the_provider_reply() {
 
 /// A `beforeSubmitPrompt` hook that blocks a channel turn keeps it from the
 /// model and its reason is what the sender gets back (#8124).
+/// Spawns the hook under `/bin/sh`.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_prompt_hook_blocks_a_channel_turn_and_replies_with_its_reason() {
-    crate::hooks::host::install_prompt_hooks_for_test().await;
+    crate::hooks::fixture::install_prompt_hooks().await;
     let linked = run_linked_telegram_message(
         "blocked-msg",
-        &format!("{} please", crate::hooks::host::TEST_HOOK_BLOCK),
+        &format!("{} please", crate::hooks::fixture::BLOCK),
     )
     .await;
 
@@ -312,12 +314,14 @@ async fn a_prompt_hook_blocks_a_channel_turn_and_replies_with_its_reason() {
 }
 
 /// A `beforeSubmitPrompt` hook's context reaches the model on a channel turn.
+/// Spawns the hook under `/bin/sh`.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_prompt_hooks_context_reaches_the_model_on_a_channel_turn() {
-    crate::hooks::host::install_prompt_hooks_for_test().await;
+    crate::hooks::fixture::install_prompt_hooks().await;
     let linked = run_linked_telegram_message(
         "context-msg",
-        &format!("{} look", crate::hooks::host::TEST_HOOK_CONTEXT),
+        &format!("{} look", crate::hooks::fixture::CONTEXT),
     )
     .await;
 
