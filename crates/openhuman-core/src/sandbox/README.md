@@ -252,7 +252,7 @@ The settings surface (`get_sandbox_settings`, `[security.sandbox]` and
   shell tool's sandbox. `local_jail` grants are merged at spawn either way.
 - The sandbox Docker backend (`sandbox/docker.rs`) always mounts
   `workspace_root` at `/workspace`; `[runtime.docker] mount_workspace = false`
-  is honoured only by the runtime adapter's Docker path, not by it.
+  is honoured only by the runtime adapter's Docker path, not by this backend.
 - Every current caller passes `is_remote_session = false`, so in practice
   Docker is chosen only by `[runtime] kind = "docker"`.
 - The Local backend's scratch directory lives under `workspace_dir`, which
